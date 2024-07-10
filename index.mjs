@@ -1,9 +1,10 @@
 ///////////////////
 // 만들어야 할 것 //
 ///////////////////
-// 1. 농작물 심기, 수확하기
+// 1. 농작물 심기, 수확하기, 확인하기 (완성)
+// 1-1. 습격중인 농장은 수확 안되게하기
 // 2. 제사 (기우제 등등)
-// 3. 전투 (두더지, 까마귀 등등)
+// 3. 전투 (두더지, 까마귀 등등), (현재 전투 발생 까지 제작)
 // 4. 아이템 제작, 수리
 
 import { ActionRowBuilder, Client, EmbedBuilder, GatewayIntentBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
@@ -15,6 +16,38 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const db = new sqlite3.Database('db/gameDB.db');
 
 const TOKEN = process.env.DISCORD_TOKEN;
+
+const farmLate = setInterval(async () => {
+    const stf = await new Promise(async (resolve, reject) => { // 씨앗의 자란 형태
+        await db.all(`SELECT * FROM seedToFruit`, (err, rows) => resolve(rows));
+    })
+
+    const userFarm = await new Promise(async (resolve, reject) => { // 유저 농장
+        await db.all(`SELECT * FROM userFarm`, (err, rows) => resolve(rows));
+    })
+
+    const nowDate = new Date();
+    userFarm.forEach(async farm => {
+        const user = client.users.fetch(farm.id);
+        if (farm.lateDate == 'none') return;
+        let lateDate = new Date(farm.lateDate);
+        lateDate = lateDate - nowDate
+        if (farm.battle == 0) {
+            if (lateDate > 0) {
+                if (Math.random() <= 0.0076) {
+                    await db.run(`UPDATE userFarm SET battle = 1 WHERE farmId = ?`, [farm.farmId]);
+                    (await user).send(`${farm.farmName}에서 침입이 발생했습니다!`)
+                }
+            } else {
+                if (farm.fruit == 'none') {
+                    const fruitName = stf.find(stf => farm.seed == stf.seed);
+                    await db.run(`UPDATE userFarm SET lateDate = 'growth', fruit = ? WHERE farmId = ?`, [fruitName.fruit, farm.farmId]);
+                    (await user).send(`${farm.farmName}의 "${farm.seed}"이(가) "${fruitName.fruit}"으로 자랐습니다!`)
+                }
+            }
+        }
+    });
+}, 1000);
 
 const rankOrder = ['E', 'D', 'C', 'B', 'A', 'S', 'EX', 'AT'];
 
@@ -29,6 +62,7 @@ client.on('interactionCreate', async interaction => {
         if (!await joinCheck(interaction.user.id)) {
             await db.run(`INSERT INTO user(id) VALUES(?)`, [interaction.user.id]);
             await db.run(`INSERT INTO userStat(id) VALUES(?)`, [interaction.user.id]);
+            for (let i = 1; i <= 5; i++) await db.run(`INSERT INTO userFarm(id, farmName) VALUES(?, ?)`, [interaction.user.id, `${interaction.user.globalName}의 농장_${i}`]);
             await userGainItem(interaction.user.id, 'money', 1000, 'money', 'join');
             await userGainItem(interaction.user.id, '시작의 괭이', 1, 'tool', 'join');
             await interaction.editReply('# 배터리팜 가입에 성공하셨습니다.\n\n*## 돈  +1000원\n## 시작의 괭이  +1*\n### ***__tip__*** **) 상점에서 "평범한 씨앗" 을 구입해서 심어보세요!**');
@@ -272,6 +306,171 @@ client.on('interactionCreate', async interaction => {
         }
         return;
     }
+
+
+    if (interaction.commandName === "농사") {
+        const activity = interaction.options.getString('활동');        
+        const userInfo = await getUserInfo(interaction.user.id)
+        if(activity != '확인하기' && userInfo.activeItem == 'none') {
+            await interaction.deferReply({ ephemeral: true })
+            await interaction.editReply('괭이를 착용하지 않으셨습니다.');
+            return;
+        }
+
+        activity == '심기' ? await interaction.deferReply({ ephemeral: true }) : await interaction.deferReply();
+
+        let userFarm = await getUserFarm(interaction.user.id);
+        if (activity == '확인하기') {
+            let farmList = '';
+            const nowDate = new Date();
+
+            userFarm.forEach(farm => {
+                farmList += `**${farm.farmName}**\n`;
+                if (farm.seed == 'none') {
+                    farmList += '*심은 씨앗 없음*'
+                } else {
+                    farmList += `*${farm.seed}*\n`
+
+                    if (farm.battle == 1) {
+                        farmList += `***__침입 발생!__***`
+                    } else {
+                        let lateDate = new Date(farm.lateDate);
+                        lateDate = lateDate - nowDate;
+                        if (lateDate > 0) {
+                            farmList += `${formatTimeDifference(lateDate)} 남음`;
+                        } else {
+                            farmList += `***__수확 가능__***`
+                        }
+                    }
+                }
+                farmList += '\n\n'
+            });
+
+            const farmEmbed = new EmbedBuilder()
+                .setTitle(`${interaction.user.globalName}의 농장`)
+                .setDescription(farmList)
+                .setThumbnail(interaction.user.displayAvatarURL())
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [farmEmbed] })
+        } else if (activity === '심기') {
+            const options = userFarm.map(farm =>
+                new StringSelectMenuOptionBuilder()
+                    .setLabel(farm.farmName)
+                    .setDescription(farm.seed === 'none'
+                        ? '심은 씨앗 없음'
+                        : `${farm.seed}`)
+                    .setValue(farm.farmName)
+            );
+
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('farmList')
+                .setPlaceholder('씨앗을 심을 농장을 선택하세요!')
+                .addOptions(options);
+
+            const row = new ActionRowBuilder()
+                .addComponents(select);
+
+            const response = await interaction.editReply({
+                content: '씨앗을 심을 농장을 선택하세요!',
+                components: [row],
+            });
+
+            const seedList = await new Promise(async (resolve, reject) => { // 테이블 3개 조인
+                await db.all(`SELECT si.itemName, si.amount, st.rank, sl.day, sl.hour, sl.min, sl.sec FROM userInventory si JOIN seedLate sl ON si.itemName = sl.seedName JOIN item st ON si.itemName = st.itemName WHERE si.id = ? AND st.catalog = "seed" AND si.amount > 0`, [interaction.user.id], (err, rows) => {
+                    if (err) {
+                        reject(err)
+                    } else {
+                        resolve(rows)
+                    }
+                })
+            })
+
+            const collector = response.createMessageComponentCollector({ time: 180_000 });
+
+            collector.on('end', async (collected, reason) => { // 콜렉터의 시간이 끝나면 실행
+                if (reason == 'time') {
+                    await interaction.editReply({ content: '3분동안 입력이 없어 취소되었습니다.', components: [] });
+                }
+            });
+
+            let farmName;
+            collector.on('collect', async i => {
+                await interaction.editReply({ components: [] })
+
+                if (i.customId == 'farmList') {
+                    farmName = i.values;
+
+                    const seedOptions = seedList.map(seed =>
+                        new StringSelectMenuOptionBuilder()
+                            .setLabel(`${seed.itemName}`)
+                            .setDescription(`${seed.rank}등급 / 소요시간: ${selectTxt(seed)}`)
+                            .setValue(seed.itemName)
+                    );
+
+                    const seedSelect = new StringSelectMenuBuilder()
+                        .setCustomId('seedList')
+                        .setPlaceholder('심을 씨앗을 선택하세요!')
+                        .addOptions(seedOptions);
+
+                    const seedRow = new ActionRowBuilder()
+                        .addComponents(seedSelect);
+
+                    const seedResponse = await interaction.editReply({
+                        content: `**심을 씨앗을 선택하세요!**\n__\`상호작용 실패\`__ *가 나타날 때 까지 __기다렸다가__ 씨앗을 골라주세요.*`,
+                        components: [seedRow],
+                    });
+
+                } else if (i.customId == 'seedList') {
+                    const seed = seedList.find(seed => seed.itemName == i.values);
+
+                    let seedIf = false
+                    userFarm.forEach(farm => {
+                        if (seedIf == true) return;
+                        if (farm.seed == seed.itemName) seedIf = true;
+                    });
+
+                    if (seedIf == true) {
+                        await interaction.editReply(`해당 씨앗은 이미 다른 농장에 심으셨습니다.`);
+                        return;
+                    }
+                    const nowDate = new Date();
+                    let lateDate = new Date();
+                    lateDate.setDate(lateDate.getDate() + seed.day);
+                    lateDate.setHours(lateDate.getHours() + seed.hour);
+                    lateDate.setMinutes(lateDate.getMinutes() + seed.min);
+                    lateDate.setSeconds(lateDate.getSeconds() + seed.sec);
+
+                    lateDate = formatDate(lateDate);
+
+                    await db.run(`UPDATE userFarm SET seed = ?, fruit = 'none', lateDate = ? WHERE farmName = ? AND id = ? `, [seed.itemName, lateDate, farmName[0], interaction.user.id]);
+                    await interaction.editReply({ content: `${farmName} 에 ${seed.itemName}을(를) 심으셨습니다.`, components: [] })
+
+                    await userGainItem(interaction.user.id, seed.itemName, -1, 'seed', 'planting seed')
+                    collector.stop()
+                }
+            });
+        } else if (activity === '수확하기') {
+            let harvList = ''
+            for (const farm of userFarm) {
+                if (farm.fruit == 'none') continue;
+                await userGainItem(interaction.user.id, farm.fruit, 1, 'fruit', 'harvest');
+                await db.run(`UPDATE userFarm SET seed = 'none', fruit = 'none', lateDate = 'none' WHERE farmId = ?`, [farm.farmId]);
+                harvList += farm.fruit + ' +1\n';
+            }
+
+            if (harvList == '') {
+                await interaction.editReply(`수확을 할 수 있는 농장이 없습니다.`);
+                return;
+            }
+            await interaction.editReply(`${interaction.user.globalName}님이 열매를 수확했습니다.\n\n *${harvList}*`);
+        }
+        return;
+    }
+
+    if (interaction.commandName === "제사") {
+        // 이제 여기 해야됨
+    }
 });
 
 function NumberConversion(Num) { // 숫자 변환 예) 100000 => 100,000
@@ -289,6 +488,45 @@ async function joinCheck(id) {
         });
     });
 };
+
+function selectTxt(seed) {
+    let txt = '';
+    if (seed.day > 0) txt += `${seed.day}일 `;
+    if (seed.hour > 0) txt += `${seed.hour}시간 `;
+    if (seed.min > 0) txt += `${seed.min}분 `;
+    if (seed.sec > 0) txt += `${seed.sec}초`;
+    return txt.trim(); // 문자열 반환
+}
+
+function formatDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function formatTimeDifference(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    const remainingHours = hours % 24;
+    const remainingMinutes = minutes % 60;
+    const remainingSeconds = seconds % 60;
+
+    let result = '';
+    if (days > 0) result += `${days}일 `;
+    if (remainingHours > 0) result += `${remainingHours}시간 `;
+    if (remainingMinutes > 0) result += `${remainingMinutes}분 `;
+    if (remainingSeconds > 0) result += `${remainingSeconds}초`;
+
+    return result.trim();
+}
 
 async function getUserInfo(id) {
     return new Promise((resolve, reject) => {
@@ -363,6 +601,19 @@ async function userGainItem(id, itemName, amount, catalog, actionReason) {
         }
     }
 }
+
+async function getUserFarm(id) {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM userFarm WHERE id = ? ORDER BY farmName", [id], (err, rows) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(rows);
+            }
+        });
+    });
+};
+
 
 // DATA
 async function getBuyItemData(catalog) {

@@ -84,12 +84,34 @@ const commands = [
         description: '괭이를 장착합니다. (현재 장착중인 괭이를 선택하면 장착이 해제됩니다.)'
     },
     {
-        name: '심기',
-        description: '씨앗을 심습니다.'
+        name: '농사',
+        description: '농사를 합니다.',
+        options: [
+            {
+                name: '활동',
+                description: "어떤 활동을 할지 지정합니다.",
+                type: 3,
+                required: true,
+                choices: [
+                    {
+                        name: '심기',
+                        value: '심기'
+                    },
+                    {
+                        name: '수확하기',
+                        value: '수확하기'
+                    },
+                    {
+                        name: '확인하기',
+                        value: '확인하기'
+                    }
+                ]
+            },
+        ]
     },
     {
-        name: '수확하기',
-        description: '열매를 수확합니다..'
+        name: '제사',
+        description: '농사를 위한 제사를 지냅니다.'
     }
 ];
 
