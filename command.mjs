@@ -104,6 +104,10 @@ const commands = [
                     {
                         name: '확인하기',
                         value: '확인하기'
+                    },
+                    {
+                        name: '포기하기',
+                        value: '포기하기'
                     }
                 ]
             },
@@ -112,6 +116,14 @@ const commands = [
     {
         name: '제사',
         description: '농사를 위한 제사를 지냅니다.'
+    },
+    {
+        name: '전투',
+        description: '습격에 대응합니다.'
+    },
+    {
+        name: '',
+        description: ''
     }
 ];
 
